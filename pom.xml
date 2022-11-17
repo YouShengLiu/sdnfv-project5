@@ -32,14 +32,12 @@
     <url>http://onosproject.org</url>
 
     <properties>
-        <!-- Uncomment to generate ONOS app from this module.
-        <onos.app.name>org.foo.app</onos.app.name>
-        <onos.app.title>Foo App</onos.app.title>
-        <onos.app.origin>Foo, Inc.</onos.app.origin>
+        <onos.app.name>nctu.winlab.proxyarp</onos.app.name>
+        <onos.app.title>ARP Proxy</onos.app.title>
+        <onos.app.origin>Winlab, NCTU</onos.app.origin>
         <onos.app.category>default</onos.app.category>
         <onos.app.url>http://onosproject.org</onos.app.url>
         <onos.app.readme>ONOS OSGi bundle archetype.</onos.app.readme>
-        -->
     </properties>
 
     <dependencies>
@@ -83,11 +81,9 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-checkstyle-plugin</artifactId>
-                <!-- Uncomment to disable checkstyle validation
                 <configuration>
                     <skip>true</skip>
                 </configuration>
-                -->
             </plugin>
         </plugins>
     </build>

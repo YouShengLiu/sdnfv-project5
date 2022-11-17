@@ -25,11 +25,11 @@ import org.onosproject.cfg.ComponentConfigAdapter;
  */
 public class AppComponentTest {
 
-    private AppComponent component;
+    private ProxyARP component;
 
     @Before
     public void setUp() {
-        component = new AppComponent();
+        component = new ProxyARP();
         component.cfgService = new ComponentConfigAdapter();
         component.activate();
     }
