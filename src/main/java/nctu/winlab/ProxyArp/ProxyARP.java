@@ -25,25 +25,27 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import java.util.HashMap;
 import java.util.Map;
-import java.lang.String;
+import java.nio.ByteBuffer;
 
 import org.onlab.packet.Ethernet;
 import org.onlab.packet.ARP;
-import org.onlab.packet.IPv4;
+import org.onlab.packet.MacAddress;
+import org.onlab.packet.Ip4Address;
 
 import org.onosproject.core.CoreService;
 import org.onosproject.core.ApplicationId;
 
-// import org.onosproject.net.DeviceId;
-// import org.onosproject.net.PortNumber;
-// import org.onosproject.net.ConnectPoint;
 import org.onosproject.net.flow.DefaultTrafficSelector;
+import org.onosproject.net.flow.DefaultTrafficTreatment;
 import org.onosproject.net.flow.TrafficSelector;
 import org.onosproject.net.packet.InboundPacket;
 import org.onosproject.net.packet.PacketContext;
 import org.onosproject.net.packet.PacketPriority;
 import org.onosproject.net.packet.PacketProcessor;
 import org.onosproject.net.packet.PacketService;
+import org.onosproject.net.packet.DefaultOutboundPacket;
+import org.onosproject.net.ConnectPoint;
+import org.onosproject.net.edge.EdgePortService;
 
 /**
  * Skeletal ONOS application component.
@@ -65,11 +67,13 @@ public class ProxyARP {
     @Reference(cardinality = ReferenceCardinality.MANDATORY)
     protected PacketService packetService;
 
+    @Reference(cardinality = ReferenceCardinality.MANDATORY)
+    protected EdgePortService edgePortService;
 
     /* Variables */
     private ApplicationId appId;
     private MyPacketProcessor processor = new MyPacketProcessor();
-    private Map<String, String> table = new HashMap<>();
+    private Map<Ip4Address, MacAddress> table = new HashMap<>();
 
     @Activate
     protected void activate() {
@@ -107,12 +111,29 @@ public class ProxyARP {
         packetService.cancelPackets(selector.build(), PacketPriority.CONTROL, appId);
     }
 
-    private void addTable(String ip_addr, String mac_addr) {
+    private void addTable(Ip4Address ip_addr, MacAddress mac_addr) {
         table.put(ip_addr, mac_addr);
     }
 
-    private String lookupTable(String ip_addr) {
+    private MacAddress lookupTable(Ip4Address ip_addr) {
         return table.get(ip_addr);
+    }
+
+    private void packetoutEdgePort(InboundPacket packet) {
+        ConnectPoint src = packet.receivedFrom();
+
+        for (ConnectPoint cp: edgePortService.getEdgePoints()) {
+            if (cp.toString().compareTo(src.toString()) == 0) {
+                // log.info("packetout match {} == {}, ignore this port", cp , src);
+                continue;
+            } else {
+                packetService.emit(new DefaultOutboundPacket(
+                    cp.deviceId(),
+                    DefaultTrafficTreatment.builder().setOutput(cp.port()).build(),
+                    packet.unparsed()
+                ));
+            }
+        }
     }
 
     /* Handle the packets coming from switchs */
@@ -120,40 +141,55 @@ public class ProxyARP {
         @Override
         public void process(PacketContext context) {
             if (context.isHandled()) {
-                // log.info("Packet has been handled, skip it...");
                 return;
             }
 
             InboundPacket pkt = context.inPacket();
             Ethernet eth_packet = pkt.parsed();
-            // IPacket eth_payload = eth_packet.getPayload();
 
             if (eth_packet.getEtherType() == Ethernet.TYPE_ARP) {
                 ARP arp_packet = (ARP) eth_packet.getPayload();
                 short op_code = arp_packet.getOpCode();
                 
-                if (op_code == 1) {
+                if (op_code == ARP.OP_REQUEST) {
                     /* ARP Request */
-                    String src_ip_addr  = IPv4.fromIPv4Address(IPv4.toIPv4Address(arp_packet.getSenderProtocolAddress()));
-                    String dst_ip_addr  = IPv4.fromIPv4Address(IPv4.toIPv4Address(arp_packet.getTargetProtocolAddress()));
-                    String src_mac_addr = eth_packet.getSourceMAC().toString();
-                    String dst_mac_addr = lookupTable(dst_ip_addr);
+                    Ip4Address src_ip_addr  = Ip4Address.valueOf(arp_packet.getSenderProtocolAddress());
+                    Ip4Address dst_ip_addr  = Ip4Address.valueOf(arp_packet.getTargetProtocolAddress());
+                    MacAddress src_mac_addr = eth_packet.getSourceMAC();
+                    MacAddress dst_mac_addr = lookupTable(dst_ip_addr);
 
                     if (lookupTable(src_ip_addr) == null) {
                         addTable(src_ip_addr, src_mac_addr);
                     }
 
                     if (dst_mac_addr == null) {
+                        /* Table miss, packet out to all edge ports */
                         log.info("TABLE MISS. Send request to edge ports");
+
+                        packetoutEdgePort(pkt);
                     } else {
-                        log.info("TABLE HIT. Requested MAC = {}", dst_mac_addr);
+                        /* Table hit, generate ARP response to reply the sender */
+                        log.info("TABLE HIT. Requested MAC = {}", dst_mac_addr.toString());
+
+                        Ethernet arp_reply = ARP.buildArpReply(dst_ip_addr, dst_mac_addr, eth_packet);
+
+                        packetService.emit(new DefaultOutboundPacket(
+                            pkt.receivedFrom().deviceId(),
+                            DefaultTrafficTreatment.builder().setOutput(pkt.receivedFrom().port()).build(),
+                            ByteBuffer.wrap(arp_reply.serialize())
+                        ));
+                    }
+                } else if (op_code == ARP.OP_REPLY){
+                    /* ARP Response */
+                    Ip4Address src_ip_addr  = Ip4Address.valueOf(arp_packet.getSenderProtocolAddress());
+                    MacAddress src_mac_addr = eth_packet.getSourceMAC();
+                    MacAddress dst_mac_addr = eth_packet.getDestinationMAC();
+
+                    if (lookupTable(src_ip_addr) == null) {
+                        addTable(src_ip_addr, src_mac_addr);
                     }
 
-                    log.info("ARP Request: {}", arp_packet);
-                    log.info("MAC: {} IP: {}", src_mac_addr, src_ip_addr);
-                } else if (op_code == 2){
-                    /* ARP Response */
-                    log.info("ARP Response: {}", arp_packet);
+                    log.info("RECV REPLY. Requested MAC = {}", dst_mac_addr.toString());
                 }
             }
         }
